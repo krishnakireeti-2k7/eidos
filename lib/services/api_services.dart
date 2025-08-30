@@ -5,8 +5,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiService {
-  final String _baseUrl =
-      'YOUR_BACKEND_URL_HERE'; // Replace with your actual backend URL
+    final String _baseUrl = 'http://127.0.0.1:3000'; // Or your backend URL
+  // Replace with your actual backend URL
 
   Future<String> sendMessage(String text) async {
     try {

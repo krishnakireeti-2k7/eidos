@@ -1,21 +1,24 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'features/chat/presentation/chat_page.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'features/auth/presentation/auth_screen.dart'; // Or your entry screen
 
-void main() {
-  runApp(const ProviderScope(child: MyApp()));
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Supabase.initialize(
+    url: 'YOUR_SUPABASE_URL', // From Supabase dashboard
+    anonKey: 'YOUR_ANON_KEY', // Public anon key (safe for client)
+  );
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'EIDOS Memory Chat',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const ChatPage(), // This is the starting point
+      home: AuthScreen(), // Start with auth
     );
   }
 }
