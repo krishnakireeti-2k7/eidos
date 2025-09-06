@@ -1,70 +1,34 @@
 // lib/features/auth/presentation/auth_screen.dart
-
+import 'package:eidos/features/auth/presentation/auth_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class AuthScreen extends StatefulWidget {
+class AuthScreen extends ConsumerWidget {
   const AuthScreen({super.key});
-  @override
-  _AuthScreenState createState() => _AuthScreenState();
-}
-
-class _AuthScreenState extends State<AuthScreen> {
-  bool _isLoading = false;
-
-  Future<void> _signInWithGoogle() async {
-    setState(() => _isLoading = true);
-    try {
-      print('Attempting Google sign-in');
-      await Supabase.instance.client.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: 'io.supabase.eidos://login-callback/',
-      );
-      print('Google sign-in initiated, awaiting redirect');
-    } catch (e) {
-      print('Google sign-in error: $e');
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
 
   @override
-  void initState() {
-    super.initState();
-    // This listener now only handles database insertion.
-    // The main.dart StreamBuilder handles the navigation.
-    Supabase.instance.client.auth.onAuthStateChange.listen((data) async {
-      final session = data.session;
-      if (data.event == AuthChangeEvent.signedIn && session != null) {
-        final user = Supabase.instance.client.auth.currentUser;
-        if (user != null) {
-          try {
-            final existing =
-                await Supabase.instance.client
-                    .from('users')
-                    .select()
-                    .eq('id', user.id)
-                    .maybeSingle();
-            if (existing == null) {
-              await Supabase.instance.client.from('users').insert({
-                'id': user.id,
-                'email': user.email!,
-                'created_at': DateTime.now().toIso8601String(),
-              });
-            }
-          } catch (e) {
-            print('Error inserting user: $e');
-          }
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authControllerProvider);
+
+    // This is the updated code block to print the token in chunks
+    ref.listen(authControllerProvider, (_, state) {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session != null) {
+        final fullToken = session.accessToken;
+        const chunkSize = 200;
+        print('--- START OF FULL JWT TOKEN ---');
+        for (int i = 0; i < fullToken.length; i += chunkSize) {
+          int end =
+              (i + chunkSize < fullToken.length)
+                  ? i + chunkSize
+                  : fullToken.length;
+          print(fullToken.substring(i, end));
         }
+        print('--- END OF FULL JWT TOKEN ---');
       }
     });
-  }
 
-  @override
-  Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -95,7 +59,7 @@ class _AuthScreenState extends State<AuthScreen> {
                 ),
               ),
               const SizedBox(height: 32),
-              _isLoading
+              authState.isLoading
                   ? const CircularProgressIndicator(
                     valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                   )
@@ -103,7 +67,11 @@ class _AuthScreenState extends State<AuthScreen> {
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeInOut,
                     child: ElevatedButton.icon(
-                      onPressed: _signInWithGoogle,
+                      onPressed:
+                          () =>
+                              ref
+                                  .read(authControllerProvider.notifier)
+                                  .signInWithGoogle(),
                       icon: const Icon(
                         Icons.g_mobiledata,
                         size: 24,
@@ -118,7 +86,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF4285F4), // Google Blue
+                        backgroundColor: const Color(0xFF4285F4),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 24,
                           vertical: 12,
@@ -131,6 +99,14 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                     ),
                   ),
+              if (authState.hasError)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: Text(
+                    authState.error.toString(),
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                ),
             ],
           ),
         ),
