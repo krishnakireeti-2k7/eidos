@@ -5,15 +5,10 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ApiService {
-  // Deployed functions domain (use the functions.supabase.co domain you deployed to)
+  // Correct Supabase Edge Functions domain
   final String _functionsBase =
-      'https://otckcbxbwqvojmdeskqf.functions.supabase.co';
+      'https://otckcbxbwqvojmdeskqf.supabase.co/functions/v1';
 
-  /// Sends a message to the /chat Edge Function and returns Gemini's reply.
-  ///
-  /// - `text`: user message to send
-  /// - `userId`: optional; if omitted the current Supabase user's id will be used (if available)
-  /// - `requireAuth`: if true and no JWT is available, this will throw. Default false to allow public functions.
   Future<String> sendMessage(
     String text, {
     String? userId,
@@ -47,7 +42,6 @@ class ApiService {
 
       if (resp.statusCode == 200) {
         final Map<String, dynamic> data = jsonDecode(resp.body);
-        // Your Edge Function returns { "response": "..." }
         final String? reply = (data['response'] ?? data['message'])?.toString();
         return reply ?? resp.body;
       } else {
