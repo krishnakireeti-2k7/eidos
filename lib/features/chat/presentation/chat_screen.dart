@@ -3,29 +3,32 @@ import 'package:eidos/features/chat/presentation/chat_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key});
+  final String chatId;
+
+  const ChatScreen({super.key, required this.chatId});
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
+  late String _activeChatId;
   late final TextEditingController _textController;
   late final ScrollController _scrollController;
 
   @override
   void initState() {
     super.initState();
+    _activeChatId = widget.chatId;
     _textController = TextEditingController();
     _scrollController = ScrollController();
-    debugPrint('ChatScreen: Initialized');
   }
 
   @override
   void dispose() {
-    debugPrint('ChatScreen: Disposing');
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -34,65 +37,119 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void _scrollToBottom() {
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
-        try {
-          debugPrint('ChatScreen: Scrolling to bottom');
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        } catch (e) {
-          debugPrint('ChatScreen: Scroll error: $e');
-        }
-      } else {
-        debugPrint('ChatScreen: ScrollController not attached');
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
       }
     });
   }
 
+  Future<void> _createNewChat() async {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
+
+    final response =
+        await Supabase.instance.client
+            .from('chats')
+            .insert({'user_id': userId, 'title': 'New Chat'})
+            .select()
+            .single();
+
+    setState(() {
+      _activeChatId = response['id'];
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchChats() async {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return [];
+    return await Supabase.instance.client
+        .from('chats')
+        .select()
+        .eq('user_id', userId)
+        .order('created_at');
+  }
+
   @override
   Widget build(BuildContext context) {
-    final messagesAsync = ref.watch(chatControllerProvider);
+    final messagesAsync = ref.watch(chatControllerProvider(_activeChatId));
 
-    ref.listen<AsyncValue<List<ChatMessage>>>(chatControllerProvider, (
-      prev,
-      next,
-    ) {
-      debugPrint('ChatScreen: State changed: $next');
-      if (next is AsyncData) {
-        _scrollToBottom();
-      }
-    });
+    ref.listen<AsyncValue<List<ChatMessage>>>(
+      chatControllerProvider(_activeChatId),
+      (prev, next) {
+        if (next is AsyncData) _scrollToBottom();
+      },
+    );
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('EIDOS Chat'),
+        title: const Text("EIDOS"),
         backgroundColor: const Color(0xFF1A1A2E),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () {
-              debugPrint('ChatScreen: Refreshing messages');
-              ref.read(chatControllerProvider.notifier).fetchMessages();
-            },
+      ),
+      drawer: Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              const DrawerHeader(
+                child: Text(
+                  "Your Chats",
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Expanded(
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _fetchChats(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final chats = snapshot.data!;
+                    if (chats.isEmpty) {
+                      return const Center(child: Text("No chats yet"));
+                    }
+                    return ListView.builder(
+                      itemCount: chats.length,
+                      itemBuilder: (context, index) {
+                        final chat = chats[index];
+                        final isActive = chat['id'] == _activeChatId;
+                        return ListTile(
+                          title: Text(chat['title'] ?? 'Untitled'),
+                          tileColor: isActive ? Colors.blue[100] : null,
+                          onTap: () {
+                            setState(() {
+                              _activeChatId = chat['id'];
+                            });
+                            Navigator.pop(context); // close drawer
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.add),
+                title: const Text("New Chat"),
+                onTap: () async {
+                  await _createNewChat();
+                  if (context.mounted) Navigator.pop(context);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.logout),
+                title: const Text("Logout"),
+                onTap: () async {
+                  await ref.read(authControllerProvider.notifier).signOut();
+                  if (context.mounted) {
+                    Navigator.pushReplacementNamed(context, '/auth');
+                  }
+                },
+              ),
+            ],
           ),
-          IconButton(
-            icon: const Icon(Icons.info),
-            onPressed: () {
-              debugPrint(
-                'ChatScreen: Current state: ${ref.read(chatControllerProvider)}',
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              debugPrint('ChatScreen: Signing out');
-              await ref.read(authControllerProvider.notifier).signOut();
-              Navigator.pushReplacementNamed(context, '/auth');
-            },
-          ),
-        ],
+        ),
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -107,11 +164,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             Expanded(
               child: messagesAsync.when(
                 data: (messages) {
-                  debugPrint(
-                    'ChatScreen: Rendering ${messages.length} messages',
-                  );
                   if (messages.isEmpty) {
-                    debugPrint('ChatScreen: No messages to render');
                     return const Center(
                       child: Text(
                         'No messages yet',
@@ -125,41 +178,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     itemCount: messages.length,
                     itemBuilder: (context, index) {
                       final message = messages[index];
-                      debugPrint(
-                        'ChatScreen: Rendering message $index: ${message.content}',
-                      );
                       return _ChatMessageBubble(message: message);
                     },
                   );
                 },
-                loading: () {
-                  debugPrint('ChatScreen: Loading messages');
-                  return const Center(child: CircularProgressIndicator());
-                },
-                error: (e, st) {
-                  debugPrint('ChatScreen: Error: $e');
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          'Error: $e',
-                          style: const TextStyle(color: Colors.red),
-                        ),
-                        const SizedBox(height: 8),
-                        ElevatedButton(
-                          onPressed: () {
-                            debugPrint('ChatScreen: Retrying fetch');
-                            ref
-                                .read(chatControllerProvider.notifier)
-                                .fetchMessages();
-                          },
-                          child: const Text('Retry'),
-                        ),
-                      ],
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error:
+                    (e, st) => Center(
+                      child: Text(
+                        'Error: $e',
+                        style: const TextStyle(color: Colors.red),
+                      ),
                     ),
-                  );
-                },
               ),
             ),
             Padding(
@@ -180,7 +210,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         hintStyle: const TextStyle(color: Colors.grey),
                       ),
                       style: const TextStyle(color: Colors.white),
-                      onSubmitted: (value) => _send(),
+                      onSubmitted: (_) => _send(),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -200,9 +230,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void _send() async {
     final text = _textController.text.trim();
     if (text.isEmpty) return;
-    debugPrint('ChatScreen: Sending message: $text');
     _textController.clear();
-    await ref.read(chatControllerProvider.notifier).sendMessage(text);
+    await ref
+        .read(chatControllerProvider(_activeChatId).notifier)
+        .sendMessage(text);
     _scrollToBottom();
   }
 }

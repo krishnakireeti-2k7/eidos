@@ -2,9 +2,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'features/auth/presentation/auth_screen.dart';
-import 'features/chat/presentation/chat_screen.dart';
 import 'features/auth/presentation/auth_controller.dart';
+import 'features/chat/presentation/chat_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,10 +33,9 @@ class _MyAppState extends ConsumerState<MyApp> {
       if (data.event == AuthChangeEvent.signedIn && session != null) {
         final user = Supabase.instance.client.auth.currentUser;
         if (user != null) {
-          // Use the controller to create the user in the database
           ref.read(authControllerProvider.notifier).createUserInDb(user);
 
-          // --- THESE ARE THE CRUCIAL LINES TO GET THE TOKEN AND ID ---
+          // Debug info for testing
           final jwt = session.accessToken;
           final userId = user.id;
           print('--- COPIED FOR EDGE FUNCTION TESTING ---');
@@ -60,9 +60,12 @@ class _MyAppState extends ConsumerState<MyApp> {
               body: Center(child: CircularProgressIndicator()),
             );
           }
+
           final session = snapshot.data?.session;
           if (session != null) {
-            return const ChatScreen();
+            // ✅ Land directly in ChatScreen with drawer
+            final user = Supabase.instance.client.auth.currentUser;
+            return ChatScreen(chatId: user?.id ?? 'default-chat');
           } else {
             return const AuthScreen();
           }

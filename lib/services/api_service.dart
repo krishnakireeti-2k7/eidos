@@ -12,6 +12,7 @@ class ApiService {
   Future<String> sendMessage(
     String text, {
     String? userId,
+    String? chatId, // ⚡ added chatId
     bool requireAuth = false,
     Duration timeout = const Duration(seconds: 20),
   }) async {
@@ -33,6 +34,7 @@ class ApiService {
     final payload = <String, dynamic>{
       'message': text,
       if (currentUserId != null) 'userId': currentUserId,
+      if (chatId != null) 'chatId': chatId, // ⚡ include chatId in payload
     };
 
     try {
