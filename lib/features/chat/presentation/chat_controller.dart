@@ -21,8 +21,8 @@ class ChatMessage {
 class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
   ChatController(this.ref, this.chatId) : super(const AsyncValue.data([])) {
     debugPrint('ChatController: Initializing for chatId: $chatId');
-    fetchMessages(); // ✅ Load history from Supabase
-    _listenToMessages(); // ✅ Then attach real-time listener
+    fetchMessages();
+    _listenToMessages();
 
     Supabase.instance.client.auth.onAuthStateChange.listen((data) {
       debugPrint('ChatController: Auth state changed: ${data.event}');
@@ -47,6 +47,8 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     debugPrint('ChatController: Fetching messages for chatId: $chatId...');
     state = const AsyncValue.loading();
     try {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+
       final response = await Supabase.instance.client
           .from('messages')
           .select()
@@ -58,7 +60,7 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
             return ChatMessage(
               id: data['id'].toString(),
               content: (data['content'] ?? '').toString(),
-              isUser: data['role'] == 'user',
+              isUser: data['user_id'] == userId,
               createdAt: DateTime.parse(
                 data['created_at'] ?? DateTime.now().toIso8601String(),
               ),
@@ -73,7 +75,7 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     }
   }
 
-    Future<void> sendMessage(String message) async {
+  Future<void> sendMessage(String message) async {
     debugPrint('ChatController: Sending message: $message');
 
     final current = state.value ?? <ChatMessage>[];
@@ -84,13 +86,39 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
       createdAt: DateTime.now(),
     );
 
-    // Optimistic UI update
     state = AsyncValue.data([...current, local]);
 
     try {
       final userId = Supabase.instance.client.auth.currentUser?.id;
       if (userId == null) throw Exception('User not authenticated');
 
+      final insertResponse =
+          await Supabase.instance.client
+              .from('messages')
+              .insert({
+                'chat_id': chatId,
+                'user_id': userId,
+                'content': message,
+                'is_user': true,
+              })
+              .select()
+              .single();
+
+      final insertedMessage = ChatMessage(
+        id: insertResponse['id'].toString(),
+        content: insertResponse['content'],
+        isUser: true,
+        createdAt: DateTime.parse(insertResponse['created_at']),
+      );
+
+      final updated =
+          state.value!
+              .map((m) => m.id == local.id ? insertedMessage : m)
+              .toList();
+
+      state = AsyncValue.data(updated);
+
+      // Call API service for assistant reply
       final apiService = ref.read(apiServiceProvider);
       final reply = await apiService.sendMessage(
         message,
@@ -108,25 +136,23 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
         createdAt: DateTime.now(),
       );
 
-      final List<ChatMessage> updated = [
-        ...(state.value ?? <ChatMessage>[])
-      ]
-        ..add(assistant)
-        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      final finalList =
+          [...(state.value ?? <ChatMessage>[])]
+            ..add(assistant)
+            ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
-      // ✅ Cast to correct type
-      state = AsyncValue.data(updated.cast<ChatMessage>());
+      state = AsyncValue.data(finalList);
     } catch (e, st) {
       debugPrint('ChatController: Send message error: $e');
       state = AsyncValue.error(e, st);
     }
   }
 
-
   void _listenToMessages() {
     debugPrint('ChatController: Starting message stream for chatId: $chatId');
 
     _sub?.cancel();
+    final userId = Supabase.instance.client.auth.currentUser?.id;
 
     final stream = Supabase.instance.client
         .from('messages')
@@ -141,14 +167,13 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
               return ChatMessage(
                 id: item['id'].toString(),
                 content: (item['content'] ?? '').toString(),
-                isUser: item['role'] == 'user',
+                isUser: item['user_id'] == userId,
                 createdAt: DateTime.parse(
                   item['created_at'] ?? DateTime.now().toIso8601String(),
                 ),
               );
             }).toList();
 
-        // ✅ Merge existing + streamed
         final current = state.value ?? <ChatMessage>[];
         final merged = [
           ...current,

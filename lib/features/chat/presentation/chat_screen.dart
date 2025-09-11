@@ -6,13 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// Create a provider for the list of chats
+// Stream provider for user's chat list
 final chatListProvider = StreamProvider.autoDispose<List<Map<String, dynamic>>>(
   (ref) {
     final userId = Supabase.instance.client.auth.currentUser?.id;
-    if (userId == null) {
-      return const Stream.empty();
-    }
+    if (userId == null) return const Stream.empty();
     return Supabase.instance.client
         .from('chats')
         .stream(primaryKey: ['id'])
@@ -76,6 +74,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(() {
       _activeChatId = response['id'];
     });
+
+    Navigator.pop(context); // close drawer
+  }
+
+  Future<void> _send() async {
+    final text = _textController.text.trim();
+    if (text.isEmpty) return;
+
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
+
+    var chatId = _activeChatId;
+
+    // If chat does not exist yet, create it
+    if (chatId.isEmpty) {
+      final newChat =
+          await Supabase.instance.client
+              .from('chats')
+              .insert({'user_id': userId, 'title': text})
+              .select()
+              .single();
+
+      chatId = newChat['id'] as String;
+      setState(() {
+        _activeChatId = chatId;
+      });
+    }
+
+    _textController.clear();
+
+    await ref.read(chatControllerProvider(chatId).notifier).sendMessage(text);
+
+    _scrollToBottom();
   }
 
   @override
@@ -165,7 +196,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                   setState(() {
                                     _activeChatId = chat['id'];
                                   });
-                                  Navigator.pop(context);
+                                  Navigator.pop(context); // close drawer
                                 },
                               );
                             },
@@ -195,10 +226,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     "New Chat",
                     style: TextStyle(color: Colors.white),
                   ),
-                  onTap: () async {
-                    await _createNewChat();
-                    if (mounted) Navigator.pop(context);
-                  },
+                  onTap: _createNewChat,
                 ),
                 ListTile(
                   leading: const Icon(Icons.logout, color: Colors.red),
@@ -292,16 +320,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
       ),
     );
-  }
-
-  void _send() async {
-    final text = _textController.text.trim();
-    if (text.isEmpty) return;
-    _textController.clear();
-    await ref
-        .read(chatControllerProvider(_activeChatId).notifier)
-        .sendMessage(text);
-    _scrollToBottom();
   }
 }
 
