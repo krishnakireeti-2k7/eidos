@@ -1,3 +1,4 @@
+// lib/features/chat/presentation/chat_screen.dart
 import 'package:eidos/features/auth/presentation/auth_controller.dart';
 import 'package:eidos/features/chat/presentation/chat_controller.dart';
 import 'package:flutter/material.dart';
@@ -5,19 +6,34 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+// Create a provider for the list of chats
+final chatListProvider = StreamProvider.autoDispose<List<Map<String, dynamic>>>(
+  (ref) {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) {
+      return const Stream.empty();
+    }
+    return Supabase.instance.client
+        .from('chats')
+        .stream(primaryKey: ['id'])
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+  },
+);
+
 class ChatScreen extends ConsumerStatefulWidget {
   final String chatId;
-
   const ChatScreen({super.key, required this.chatId});
 
   @override
-  ConsumerState<ChatScreen> createState() => _ChatScreenState();
+  ConsumerState createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   late String _activeChatId;
   late final TextEditingController _textController;
   late final ScrollController _scrollController;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
@@ -62,92 +78,143 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
-  Future<List<Map<String, dynamic>>> _fetchChats() async {
-    final userId = Supabase.instance.client.auth.currentUser?.id;
-    if (userId == null) return [];
-    return await Supabase.instance.client
-        .from('chats')
-        .select()
-        .eq('user_id', userId)
-        .order('created_at');
-  }
-
   @override
   Widget build(BuildContext context) {
     final messagesAsync = ref.watch(chatControllerProvider(_activeChatId));
-
-    ref.listen<AsyncValue<List<ChatMessage>>>(
-      chatControllerProvider(_activeChatId),
-      (prev, next) {
-        if (next is AsyncData) _scrollToBottom();
-      },
-    );
+    ref.listen(chatControllerProvider(_activeChatId), (prev, next) {
+      if (next is AsyncData) _scrollToBottom();
+    });
 
     return Scaffold(
+      key: _scaffoldKey,
       appBar: AppBar(
         title: const Text("EIDOS"),
         backgroundColor: const Color(0xFF1A1A2E),
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          onPressed: () {
+            _scaffoldKey.currentState?.openDrawer();
+          },
+        ),
       ),
       drawer: Drawer(
-        child: SafeArea(
-          child: Column(
-            children: [
-              const DrawerHeader(
-                child: Text(
-                  "Your Chats",
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF16213E), Color(0xFF1A1A2E)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: SafeArea(
+            child: Column(
+              children: [
+                const ListTile(
+                  title: Text(
+                    "Your Chats",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
-              ),
-              Expanded(
-                child: FutureBuilder<List<Map<String, dynamic>>>(
-                  future: _fetchChats(),
-                  builder: (context, snapshot) {
-                    if (!snapshot.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    final chats = snapshot.data!;
-                    if (chats.isEmpty) {
-                      return const Center(child: Text("No chats yet"));
-                    }
-                    return ListView.builder(
-                      itemCount: chats.length,
-                      itemBuilder: (context, index) {
-                        final chat = chats[index];
-                        final isActive = chat['id'] == _activeChatId;
-                        return ListTile(
-                          title: Text(chat['title'] ?? 'Untitled'),
-                          tileColor: isActive ? Colors.blue[100] : null,
-                          onTap: () {
-                            setState(() {
-                              _activeChatId = chat['id'];
-                            });
-                            Navigator.pop(context); // close drawer
-                          },
-                        );
-                      },
-                    );
+                const Divider(color: Colors.white54, height: 1),
+                Expanded(
+                  child: Consumer(
+                    builder: (context, ref, child) {
+                      final chatsAsync = ref.watch(chatListProvider);
+                      return chatsAsync.when(
+                        data: (chats) {
+                          if (chats.isEmpty) {
+                            return const Center(
+                              child: Text(
+                                "No chats yet",
+                                style: TextStyle(color: Colors.white70),
+                              ),
+                            );
+                          }
+                          return ListView.builder(
+                            itemCount: chats.length,
+                            itemBuilder: (context, index) {
+                              final chat = chats[index];
+                              final isActive = chat['id'] == _activeChatId;
+                              return ListTile(
+                                leading: Icon(
+                                  Icons.chat_bubble_outline,
+                                  color: isActive ? Colors.white : Colors.blue,
+                                ),
+                                title: Text(
+                                  chat['title'] ?? 'Untitled',
+                                  style: TextStyle(
+                                    color:
+                                        isActive
+                                            ? Colors.white
+                                            : Colors.white70,
+                                    fontWeight:
+                                        isActive
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                  ),
+                                ),
+                                tileColor:
+                                    isActive
+                                        ? Colors.white.withOpacity(0.2)
+                                        : Colors.transparent,
+                                onTap: () {
+                                  setState(() {
+                                    _activeChatId = chat['id'];
+                                  });
+                                  Navigator.pop(context);
+                                },
+                              );
+                            },
+                          );
+                        },
+                        loading:
+                            () => const Center(
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                              ),
+                            ),
+                        error:
+                            (e, st) => Center(
+                              child: Text(
+                                'Error: $e',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ),
+                      );
+                    },
+                  ),
+                ),
+                const Divider(color: Colors.white54, height: 1),
+                ListTile(
+                  leading: const Icon(Icons.add, color: Colors.green),
+                  title: const Text(
+                    "New Chat",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () async {
+                    await _createNewChat();
+                    if (mounted) Navigator.pop(context);
                   },
                 ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.add),
-                title: const Text("New Chat"),
-                onTap: () async {
-                  await _createNewChat();
-                  if (context.mounted) Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.logout),
-                title: const Text("Logout"),
-                onTap: () async {
-                  await ref.read(authControllerProvider.notifier).signOut();
-                  if (context.mounted) {
-                    Navigator.pushReplacementNamed(context, '/auth');
-                  }
-                },
-              ),
-            ],
+                ListTile(
+                  leading: const Icon(Icons.logout, color: Colors.red),
+                  title: const Text(
+                    "Logout",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  onTap: () async {
+                    await ref.read(authControllerProvider.notifier).signOut();
+                    if (mounted) {
+                      Navigator.pushReplacementNamed(context, '/auth');
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -240,7 +307,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
 class _ChatMessageBubble extends StatelessWidget {
   final ChatMessage message;
-
   const _ChatMessageBubble({required this.message});
 
   @override
