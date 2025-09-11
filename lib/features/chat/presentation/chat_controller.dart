@@ -120,7 +120,6 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     }
   }
 
-
   /// Send message: optimistic local placeholder -> insert user message -> call API -> insert assistant message
   Future<void> sendMessage(String message) async {
     debugPrint('ChatController: Sending message: $message');
@@ -320,7 +319,6 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
       debugPrint('ChatController: _listenToMessages exception: $e');
     }
   }
-
 
   /// Merge server rows (authoritative) with local placeholders.
   /// - Keeps server rows (authoritative).

@@ -60,9 +60,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
+  // --- NEW: Upsert user to avoid foreign key errors ---
+  Future<void> _ensureUserExists() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+
+    await Supabase.instance.client.from('users').upsert({
+      'id': user.id,
+      'email': user.email,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
   Future<void> _createNewChat() async {
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) return;
+
+    // Upsert user first
+    await _ensureUserExists();
 
     final response =
         await Supabase.instance.client
@@ -84,6 +99,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) return;
+
+    // Upsert user first
+    await _ensureUserExists();
 
     var chatId = _activeChatId;
 
