@@ -120,63 +120,31 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     }
   }
 
-  /// Send message: optimistic local placeholder -> insert user message -> call API -> insert assistant message
+  /// Send message: optimistic local placeholder -> call API (backend handles inserts) -> optimistic assistant placeholder
   Future<void> sendMessage(String message) async {
     debugPrint('ChatController: Sending message: $message');
 
     final current = state.value ?? <ChatMessage>[];
-    final local = ChatMessage(
-      id: 'local-${DateTime.now().millisecondsSinceEpoch}',
+    final localUserId = 'local-${DateTime.now().millisecondsSinceEpoch}';
+    final localUser = ChatMessage(
+      id: localUserId,
       content: message,
       isUser: true,
       createdAt: DateTime.now().toUtc(),
     );
 
-    // optimistic UI
-    state = AsyncValue.data(
-      [...current, local]..sort((a, b) {
-        final cmp = a.createdAt.compareTo(b.createdAt);
-        return cmp != 0 ? cmp : a.id.compareTo(b.id);
-      }),
-    );
+    // optimistic UI for user message
+    final updated = [...current, localUser]..sort((a, b) {
+      final cmp = a.createdAt.compareTo(b.createdAt);
+      return cmp != 0 ? cmp : a.id.compareTo(b.id);
+    });
+    state = AsyncValue.data(updated);
 
     try {
       final userId = Supabase.instance.client.auth.currentUser?.id;
       if (userId == null) throw Exception('User not authenticated');
 
-      // Insert user message (get DB row)
-      final insertResponse =
-          await Supabase.instance.client
-              .from('messages')
-              .insert({
-                'chat_id': chatId,
-                'user_id': userId,
-                'content': message,
-                'is_user': true,
-              })
-              .select()
-              .single();
-
-      final insertedMessage = ChatMessage(
-        id: insertResponse['id'].toString(),
-        content: insertResponse['content'],
-        isUser: true,
-        createdAt:
-            DateTime.parse(insertResponse['created_at'].toString()).toUtc(),
-      );
-
-      // replace local placeholder with DB row
-      final replaced =
-          (state.value ?? <ChatMessage>[])
-              .map((m) => m.id == local.id ? insertedMessage : m)
-              .toList();
-      replaced.sort((a, b) {
-        final cmp = a.createdAt.compareTo(b.createdAt);
-        return cmp != 0 ? cmp : a.id.compareTo(b.id);
-      });
-      state = AsyncValue.data(replaced);
-
-      // Call API service for assistant reply
+      // Call API service for assistant reply (backend stores both messages)
       final apiService = ref.read(apiServiceProvider);
       final reply = await apiService.sendMessage(
         message,
@@ -187,74 +155,42 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
 
       debugPrint('ChatController: ApiService reply: $reply');
 
-      // Try to insert assistant message into DB (use same user_id so RLS passes)
-      try {
-        final assistantInsert =
-            await Supabase.instance.client
-                .from('messages')
-                .insert({
-                  'chat_id': chatId,
-                  'user_id': userId,
-                  'content': reply,
-                  'is_user': false,
-                })
-                .select()
-                .single();
+      // Add optimistic local assistant if no similar server message already exists
+      final localAssistantId =
+          'local-assistant-${DateTime.now().millisecondsSinceEpoch}';
+      final localAssistant = ChatMessage(
+        id: localAssistantId,
+        content: reply,
+        isUser: false,
+        createdAt: DateTime.now().toUtc(),
+      );
 
-        final assistant = ChatMessage(
-          id: assistantInsert['id'].toString(),
-          content: assistantInsert['content'],
-          isUser: false,
-          createdAt:
-              DateTime.parse(assistantInsert['created_at'].toString()).toUtc(),
-        );
-
-        // Append assistant if stream hasn't already provided it.
-        final afterAssistant = [...(state.value ?? <ChatMessage>[])];
-        if (!afterAssistant.any((m) => m.id == assistant.id)) {
-          afterAssistant.add(assistant);
-        }
-        afterAssistant.sort((a, b) {
+      final after = [...(state.value ?? <ChatMessage>[])];
+      final hasSimilar = after.any(
+        (m) =>
+            !m.id.startsWith('local-') &&
+            _isSameMessageByContentAndTime(
+              m,
+              localAssistant,
+              secondsTolerance: 60,
+            ),
+      );
+      if (!hasSimilar) {
+        after.add(localAssistant);
+        after.sort((a, b) {
           final cmp = a.createdAt.compareTo(b.createdAt);
           return cmp != 0 ? cmp : a.id.compareTo(b.id);
         });
-        state = AsyncValue.data(afterAssistant);
-      } catch (e) {
-        // If DB insert fails (RLS or other), fall back to showing a local assistant placeholder
-        debugPrint(
-          'ChatController: Assistant insert failed, falling back to local placeholder: $e',
-        );
-
-        final assistantLocal = ChatMessage(
-          id: 'local-assistant-${DateTime.now().millisecondsSinceEpoch}',
-          content: reply,
-          isUser: false,
-          createdAt: DateTime.now().toUtc(),
-        );
-
-        final afterAssistant = [...(state.value ?? <ChatMessage>[])];
-        // only add if there's no very similar server message already
-        final hasSimilar = afterAssistant.any(
-          (m) =>
-              !m.id.startsWith('local-') &&
-              _isSameMessageByContentAndTime(
-                m,
-                assistantLocal,
-                secondsTolerance: 2,
-              ),
-        );
-        if (!hasSimilar) {
-          afterAssistant.add(assistantLocal);
-          afterAssistant.sort((a, b) {
-            final cmp = a.createdAt.compareTo(b.createdAt);
-            return cmp != 0 ? cmp : a.id.compareTo(b.id);
-          });
-          state = AsyncValue.data(afterAssistant);
-        }
+        state = AsyncValue.data(after);
       }
     } catch (e, st) {
       debugPrint('ChatController: Send message error: $e');
-      state = AsyncValue.error(e, st);
+      // Revert optimistic user message on error
+      final reverted =
+          (state.value ?? <ChatMessage>[])
+              .where((m) => m.id != localUserId)
+              .toList();
+      state = AsyncValue.data(reverted);
     }
   }
 
@@ -339,7 +275,7 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     for (final m in current) {
       if (m.id.startsWith('local-')) {
         final existsOnServer = server.any(
-          (s) => _isSameMessageByContentAndTime(s, m, secondsTolerance: 2),
+          (s) => _isSameMessageByContentAndTime(s, m, secondsTolerance: 60),
         );
         if (!existsOnServer) {
           out[m.id] = m;
@@ -364,7 +300,7 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
   bool _isSameMessageByContentAndTime(
     ChatMessage a,
     ChatMessage b, {
-    int secondsTolerance = 2,
+    int secondsTolerance = 60,
   }) {
     final contentA = a.content.trim();
     final contentB = b.content.trim();
