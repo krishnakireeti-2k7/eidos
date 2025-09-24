@@ -1,4 +1,3 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -52,7 +51,7 @@ class _MyAppState extends ConsumerState<MyApp> {
     return MaterialApp(
       title: 'EIDOS',
       theme: ThemeData.dark(),
-      home: StreamBuilder<AuthState>(
+      home: StreamBuilder(
         stream: Supabase.instance.client.auth.onAuthStateChange,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -62,15 +61,15 @@ class _MyAppState extends ConsumerState<MyApp> {
           }
 
           final session = snapshot.data?.session;
+
           if (session != null) {
-            // ✅ Land directly in ChatScreen with drawer
-            final user = Supabase.instance.client.auth.currentUser;
-            return ChatScreen(chatId: user?.id ?? 'default-chat');
+            return const ChatScreen();
           } else {
             return const AuthScreen();
           }
         },
       ),
+
     );
   }
 }

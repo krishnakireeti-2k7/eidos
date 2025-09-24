@@ -22,14 +22,12 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
   ChatController(this.ref, this.chatId) : super(const AsyncValue.data([])) {
     debugPrint('ChatController: Initializing for chatId: $chatId');
 
-    // Watch auth changes but initialize only once (prevents duplicate fetches)
     _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
       debugPrint('ChatController: Auth state changed: ${data.event}');
       if (data.event == AuthChangeEvent.initialSession ||
           data.event == AuthChangeEvent.signedIn) {
         _initOnce();
       } else if (data.event == AuthChangeEvent.signedOut) {
-        // cleanup on sign out
         _sub?.cancel();
         _streamInitialized = false;
         _initialized = false;
@@ -37,7 +35,6 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
       }
     });
 
-    // If already signed in, init immediately
     if (Supabase.instance.client.auth.currentUser != null) {
       _initOnce();
     }
@@ -48,8 +45,8 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
   StreamSubscription<List<Map<String, dynamic>>>? _sub;
   StreamSubscription? _authSub;
 
-  bool _initialized = false; // ensures we only init once
-  bool _streamInitialized = false; // marks that stream emitted at least once
+  bool _initialized = false;
+  bool _streamInitialized = false;
   bool _isDisposed = false;
 
   @override
@@ -61,7 +58,6 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     super.dispose();
   }
 
-  // One-time initialization sequence
   Future<void> _initOnce() async {
     if (_initialized || _isDisposed) return;
     _initialized = true;
@@ -69,8 +65,6 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     _listenToMessages();
   }
 
-  /// Fetch messages from Supabase. If [initial] is true, show loading and set state.
-  /// If stream already initialized, merge server rows with local placeholders instead of overwriting.
   Future<void> fetchMessages({bool initial = false}) async {
     if (_isDisposed) return;
     debugPrint('ChatController: Fetching messages for chatId: $chatId...');
@@ -101,14 +95,10 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
             );
           }).toList();
 
-      serverMessages.sort((a, b) {
-        final cmp = a.createdAt.compareTo(b.createdAt);
-        return cmp != 0 ? cmp : a.id.compareTo(b.id);
-      });
+      debugPrint(
+        'ChatController: Fetched ${serverMessages.length} messages: ${serverMessages.map((m) => '[id=${m.id}, content=${m.content}, isUser=${m.isUser}, createdAt=${m.createdAt}]').toList()}',
+      );
 
-      debugPrint('ChatController: Fetched ${serverMessages.length} messages');
-
-      // ✅ Only update state if stream hasn't already taken over
       if (!_streamInitialized) {
         state = AsyncValue.data(serverMessages);
       }
@@ -120,7 +110,6 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     }
   }
 
-  /// Send message: optimistic local placeholder -> call API (backend handles inserts) -> optimistic assistant placeholder
   Future<void> sendMessage(String message) async {
     debugPrint('ChatController: Sending message: $message');
 
@@ -133,18 +122,15 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
       createdAt: DateTime.now().toUtc(),
     );
 
-    // optimistic UI for user message
-    final updated = [...current, localUser]..sort((a, b) {
-      final cmp = a.createdAt.compareTo(b.createdAt);
-      return cmp != 0 ? cmp : a.id.compareTo(b.id);
-    });
+    // Optimistic UI for user message
+    final updated = [...current, localUser];
     state = AsyncValue.data(updated);
 
     try {
       final userId = Supabase.instance.client.auth.currentUser?.id;
       if (userId == null) throw Exception('User not authenticated');
 
-      // Call API service for assistant reply (backend stores both messages)
+      // Call API service (backend stores user and assistant messages)
       final apiService = ref.read(apiServiceProvider);
       final reply = await apiService.sendMessage(
         message,
@@ -155,7 +141,7 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
 
       debugPrint('ChatController: ApiService reply: $reply');
 
-      // Add optimistic local assistant if no similar server message already exists
+      // Optimistic UI for assistant message
       final localAssistantId =
           'local-assistant-${DateTime.now().millisecondsSinceEpoch}';
       final localAssistant = ChatMessage(
@@ -165,27 +151,13 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
         createdAt: DateTime.now().toUtc(),
       );
 
-      final after = [...(state.value ?? <ChatMessage>[])];
-      final hasSimilar = after.any(
-        (m) =>
-            !m.id.startsWith('local-') &&
-            _isSameMessageByContentAndTime(
-              m,
-              localAssistant,
-              secondsTolerance: 60,
-            ),
-      );
-      if (!hasSimilar) {
-        after.add(localAssistant);
-        after.sort((a, b) {
-          final cmp = a.createdAt.compareTo(b.createdAt);
-          return cmp != 0 ? cmp : a.id.compareTo(b.id);
-        });
-        state = AsyncValue.data(after);
-      }
+      final after = [...(state.value ?? <ChatMessage>[]), localAssistant];
+      state = AsyncValue.data(after);
+
+      // Invalidate provider to force stream update
+      ref.invalidateSelf();
     } catch (e, st) {
       debugPrint('ChatController: Send message error: $e');
-      // Revert optimistic user message on error
       final reverted =
           (state.value ?? <ChatMessage>[])
               .where((m) => m.id != localUserId)
@@ -194,7 +166,6 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     }
   }
 
-  /// Realtime listener: server rows are authoritative; we merge server rows with any local placeholders.
   void _listenToMessages() {
     debugPrint('ChatController: Starting message stream for chatId: $chatId');
 
@@ -205,7 +176,7 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
           .from('messages')
           .stream(primaryKey: ['id'])
           .eq('chat_id', chatId)
-          .order('created_at');
+          .order('created_at', ascending: true);
 
       _sub = stream.listen(
         (data) {
@@ -223,29 +194,14 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
                 );
               }).toList();
 
-          serverRows.sort((a, b) {
-            final cmp = a.createdAt.compareTo(b.createdAt);
-            return cmp != 0 ? cmp : a.id.compareTo(b.id);
-          });
+          debugPrint(
+            'ChatController: Stream emitted ${serverRows.length} rows: ${serverRows.map((m) => '[id=${m.id}, content=${m.content}, isUser=${m.isUser}, createdAt=${m.createdAt}]').toList()}',
+          );
 
-          if (!_streamInitialized) {
-            // 🔑 First emission: replace fetchMessages result completely
-            state = AsyncValue.data(serverRows);
-            _streamInitialized = true;
-            debugPrint(
-              'ChatController: Stream first emit -> ${serverRows.length} messages (replaced)',
-            );
-          } else {
-            // Later emissions: only merge with any local placeholders
-            final merged = _mergeServerWithLocals(
-              serverRows,
-              state.value ?? [],
-            );
-            state = AsyncValue.data(merged);
-            debugPrint(
-              'ChatController: Stream emitted ${serverRows.length} rows, merged -> ${merged.length}',
-            );
-          }
+          // Clear local placeholders and use server data
+          final merged = _mergeServerWithLocals(serverRows, state.value ?? []);
+          state = AsyncValue.data(merged);
+          _streamInitialized = true;
         },
         onError: (error, stackTrace) {
           debugPrint('ChatController: Stream error: $error');
@@ -256,34 +212,29 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
     }
   }
 
-  /// Merge server rows (authoritative) with local placeholders.
-  /// - Keeps server rows (authoritative).
-  /// - Keeps local placeholders only if server doesn't already have the same message (by content + time proximity).
   List<ChatMessage> _mergeServerWithLocals(
     List<ChatMessage> server,
     List<ChatMessage> current,
   ) {
     final Map<String, ChatMessage> out = {};
 
-    // add server rows first (authoritative)
+    // Prioritize server messages
     for (final m in server) {
       out[m.id] = m;
     }
 
-    // Keep local placeholders that server hasn't returned yet (id starts with 'local-'),
-    // but skip placeholders that appear to already exist on the server (matching content + time)
+    // Keep local placeholders only if no server message matches by content and isUser
     for (final m in current) {
       if (m.id.startsWith('local-')) {
         final existsOnServer = server.any(
-          (s) => _isSameMessageByContentAndTime(s, m, secondsTolerance: 60),
+          (s) => s.content.trim() == m.content.trim() && s.isUser == m.isUser,
         );
         if (!existsOnServer) {
           out[m.id] = m;
-        } // else skip local placeholder because server already has equivalent
-      } else {
-        // non-local rows already from server or previous inserts — they will be in 'out' by id
-        if (!out.containsKey(m.id)) {
-          out[m.id] = m;
+        } else {
+          debugPrint(
+            'ChatController: Discarding local placeholder id=${m.id}, content=${m.content} as server match found',
+          );
         }
       }
     }
@@ -294,17 +245,21 @@ class ChatController extends StateNotifier<AsyncValue<List<ChatMessage>>> {
           return cmp != 0 ? cmp : a.id.compareTo(b.id);
         });
 
+    debugPrint(
+      'ChatController: Merged ${merged.length} messages: ${merged.map((m) => '[id=${m.id}, content=${m.content}, isUser=${m.isUser}, createdAt=${m.createdAt}]').toList()}',
+    );
+
     return merged;
   }
 
   bool _isSameMessageByContentAndTime(
     ChatMessage a,
     ChatMessage b, {
-    int secondsTolerance = 60,
+    int secondsTolerance = 5,
   }) {
     final contentA = a.content.trim();
     final contentB = b.content.trim();
-    if (contentA != contentB) return false;
+    if (contentA != contentB || a.isUser != b.isUser) return false;
     final diff = a.createdAt.difference(b.createdAt).inSeconds.abs();
     return diff <= secondsTolerance;
   }

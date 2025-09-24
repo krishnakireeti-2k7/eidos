@@ -1,4 +1,3 @@
-// lib/features/chat/presentation/chat_screen.dart
 import 'package:eidos/features/auth/presentation/auth_controller.dart';
 import 'package:eidos/features/chat/presentation/chat_controller.dart';
 import 'package:flutter/material.dart';
@@ -20,25 +19,25 @@ final chatListProvider = StreamProvider.autoDispose<List<Map<String, dynamic>>>(
 );
 
 class ChatScreen extends ConsumerStatefulWidget {
-  final String chatId;
-  const ChatScreen({super.key, required this.chatId});
+  const ChatScreen({super.key});
 
   @override
   ConsumerState createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
-  late String _activeChatId;
+  String? _activeChatId;
   late final TextEditingController _textController;
   late final ScrollController _scrollController;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  bool _isInitializing = true;
 
   @override
   void initState() {
     super.initState();
-    _activeChatId = widget.chatId;
     _textController = TextEditingController();
     _scrollController = ScrollController();
+    _initializeChatId();
   }
 
   @override
@@ -46,6 +45,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _initializeChatId() async {
+    // Always start with home screen (no active chat)
+    setState(() {
+      _activeChatId = null;
+      _isInitializing = false;
+    });
   }
 
   void _scrollToBottom() {
@@ -60,7 +67,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
-  // --- NEW: Upsert user to avoid foreign key errors ---
   Future<void> _ensureUserExists() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
@@ -76,7 +82,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) return;
 
-    // Upsert user first
     await _ensureUserExists();
 
     final response =
@@ -90,6 +95,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _activeChatId = response['id'];
     });
 
+    // Refresh provider so drawer highlights new chat
+    ref.invalidate(chatControllerProvider(_activeChatId!));
+
     Navigator.pop(context); // close drawer
   }
 
@@ -100,13 +108,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId == null) return;
 
-    // Upsert user first
     await _ensureUserExists();
 
-    var chatId = _activeChatId;
+    String chatId;
+    bool isNewChat = false;
 
-    // If chat does not exist yet, create it
-    if (chatId.isEmpty) {
+    if (_activeChatId == null) {
+      // Create a new chat when sending first message
       final newChat =
           await Supabase.instance.client
               .from('chats')
@@ -117,10 +125,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       chatId = newChat['id'] as String;
       setState(() {
         _activeChatId = chatId;
+        isNewChat = true;
       });
+    } else {
+      chatId = _activeChatId!;
     }
 
     _textController.clear();
+
+    // Force provider refresh for new chat
+    if (isNewChat) {
+      await ref.refresh(chatControllerProvider(chatId).notifier);
+    }
 
     await ref.read(chatControllerProvider(chatId).notifier).sendMessage(text);
 
@@ -129,10 +145,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final messagesAsync = ref.watch(chatControllerProvider(_activeChatId));
-    ref.listen(chatControllerProvider(_activeChatId), (prev, next) {
-      if (next is AsyncData) _scrollToBottom();
-    });
+    if (_isInitializing) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
 
     return Scaffold(
       key: _scaffoldKey,
@@ -214,7 +229,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                   setState(() {
                                     _activeChatId = chat['id'];
                                   });
-                                  Navigator.pop(context); // close drawer
+                                  Navigator.pop(context);
                                 },
                               );
                             },
@@ -275,35 +290,48 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         child: Column(
           children: [
             Expanded(
-              child: messagesAsync.when(
-                data: (messages) {
-                  if (messages.isEmpty) {
-                    return const Center(
-                      child: Text(
-                        'No messages yet',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    );
-                  }
-                  return ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final message = messages[index];
-                      return _ChatMessageBubble(message: message);
-                    },
-                  );
-                },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error:
-                    (e, st) => Center(
-                      child: Text(
-                        'Error: $e',
-                        style: const TextStyle(color: Colors.red),
-                      ),
-                    ),
-              ),
+              child:
+                  _activeChatId == null
+                      ? const Center(
+                        child: Text(
+                          'Start a new chat',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      )
+                      : ref
+                          .watch(chatControllerProvider(_activeChatId!))
+                          .when(
+                            data: (messages) {
+                              if (messages.isEmpty) {
+                                return const Center(
+                                  child: Text(
+                                    'No messages yet',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                );
+                              }
+                              return ListView.builder(
+                                controller: _scrollController,
+                                padding: const EdgeInsets.all(16),
+                                itemCount: messages.length,
+                                itemBuilder: (context, index) {
+                                  final message = messages[index];
+                                  return _ChatMessageBubble(message: message);
+                                },
+                              );
+                            },
+                            loading:
+                                () => const Center(
+                                  child: CircularProgressIndicator(),
+                                ),
+                            error:
+                                (e, st) => Center(
+                                  child: Text(
+                                    'Error: $e',
+                                    style: const TextStyle(color: Colors.red),
+                                  ),
+                                ),
+                          ),
             ),
             Padding(
               padding: const EdgeInsets.all(16),
