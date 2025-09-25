@@ -18,6 +18,9 @@ final chatListProvider = StreamProvider.autoDispose<List<Map<String, dynamic>>>(
   },
 );
 
+// State provider for active chat ID
+final activeChatIdProvider = StateProvider<String?>((ref) => null);
+
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
 
@@ -26,11 +29,11 @@ class ChatScreen extends ConsumerStatefulWidget {
 }
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
-  String? _activeChatId;
   late final TextEditingController _textController;
   late final ScrollController _scrollController;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _isInitializing = true;
+  bool _isSending = false;
 
   @override
   void initState() {
@@ -48,9 +51,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _initializeChatId() async {
-    // Always start with home screen (no active chat)
+    // Start with home screen (no active chat)
+    ref.read(activeChatIdProvider.notifier).state = null;
     setState(() {
-      _activeChatId = null;
       _isInitializing = false;
     });
   }
@@ -91,29 +94,34 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             .select()
             .single();
 
-    setState(() {
-      _activeChatId = response['id'];
-    });
+    ref.read(activeChatIdProvider.notifier).state = response['id'];
+    ref.invalidate(chatListProvider); // Update drawer
 
-    // Refresh provider so drawer highlights new chat
-    ref.invalidate(chatControllerProvider(_activeChatId!));
-
-    Navigator.pop(context); // close drawer
+    Navigator.pop(context); // Close drawer
   }
 
   Future<void> _send() async {
     final text = _textController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isSending) return;
+
+    setState(() {
+      _isSending = true;
+    });
 
     final userId = Supabase.instance.client.auth.currentUser?.id;
-    if (userId == null) return;
+    if (userId == null) {
+      setState(() {
+        _isSending = false;
+      });
+      return;
+    }
 
     await _ensureUserExists();
 
     String chatId;
-    bool isNewChat = false;
+    final currentChatId = ref.read(activeChatIdProvider);
 
-    if (_activeChatId == null) {
+    if (currentChatId == null) {
       // Create a new chat when sending first message
       final newChat =
           await Supabase.instance.client
@@ -123,22 +131,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               .single();
 
       chatId = newChat['id'] as String;
-      setState(() {
-        _activeChatId = chatId;
-        isNewChat = true;
-      });
+      ref.read(activeChatIdProvider.notifier).state = chatId;
+      ref.invalidate(chatListProvider); // Update drawer
     } else {
-      chatId = _activeChatId!;
+      chatId = currentChatId;
     }
 
     _textController.clear();
 
-    // Force provider refresh for new chat
-    if (isNewChat) {
-      await ref.refresh(chatControllerProvider(chatId).notifier);
-    }
-
     await ref.read(chatControllerProvider(chatId).notifier).sendMessage(text);
+
+    setState(() {
+      _isSending = false;
+    });
 
     _scrollToBottom();
   }
@@ -148,6 +153,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (_isInitializing) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+
+    final activeChatId = ref.watch(activeChatIdProvider);
 
     return Scaffold(
       key: _scaffoldKey,
@@ -202,7 +209,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             itemCount: chats.length,
                             itemBuilder: (context, index) {
                               final chat = chats[index];
-                              final isActive = chat['id'] == _activeChatId;
+                              final isActive = chat['id'] == activeChatId;
                               return ListTile(
                                 leading: Icon(
                                   Icons.chat_bubble_outline,
@@ -226,9 +233,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                         ? Colors.white.withOpacity(0.2)
                                         : Colors.transparent,
                                 onTap: () {
-                                  setState(() {
-                                    _activeChatId = chat['id'];
-                                  });
+                                  ref
+                                      .read(activeChatIdProvider.notifier)
+                                      .state = chat['id'];
                                   Navigator.pop(context);
                                 },
                               );
@@ -291,7 +298,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           children: [
             Expanded(
               child:
-                  _activeChatId == null
+                  activeChatId == null
                       ? const Center(
                         child: Text(
                           'Start a new chat',
@@ -299,22 +306,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         ),
                       )
                       : ref
-                          .watch(chatControllerProvider(_activeChatId!))
+                          .watch(chatControllerProvider(activeChatId))
                           .when(
                             data: (messages) {
-                              if (messages.isEmpty) {
-                                return const Center(
-                                  child: Text(
-                                    'No messages yet',
-                                    style: TextStyle(color: Colors.white),
-                                  ),
-                                );
-                              }
                               return ListView.builder(
                                 controller: _scrollController,
                                 padding: const EdgeInsets.all(16),
-                                itemCount: messages.length,
+                                itemCount:
+                                    messages.length + (_isSending ? 1 : 0),
                                 itemBuilder: (context, index) {
+                                  if (_isSending && index == messages.length) {
+                                    return const Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Padding(
+                                        padding: EdgeInsets.all(12),
+                                        child: Text(
+                                          'Assistant is typing...',
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontStyle: FontStyle.italic,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }
                                   final message = messages[index];
                                   return _ChatMessageBubble(message: message);
                                 },
@@ -352,12 +367,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ),
                       style: const TextStyle(color: Colors.white),
                       onSubmitted: (_) => _send(),
+                      enabled: !_isSending,
                     ),
                   ),
                   const SizedBox(width: 8),
                   IconButton(
-                    icon: const Icon(Icons.send, color: Color(0xFF4285F4)),
-                    onPressed: _send,
+                    icon:
+                        _isSending
+                            ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF4285F4),
+                              ),
+                            )
+                            : const Icon(Icons.send, color: Color(0xFF4285F4)),
+                    onPressed: _isSending ? null : _send,
                   ),
                 ],
               ),
