@@ -100,6 +100,84 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     Navigator.pop(context); // Close drawer
   }
 
+   Future<void> _renameChat(String chatId, String currentTitle) async {
+    final controller = TextEditingController(text: currentTitle);
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            backgroundColor: Colors.grey[900],
+            title: const Text(
+              'Rename Chat',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: TextField(
+              controller: controller,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Enter chat name',
+                hintStyle: const TextStyle(color: Colors.grey),
+                filled: true,
+                fillColor: Colors.grey[800],
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              maxLength: 50,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  final title = controller.text.trim();
+                  if (title.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Chat name cannot be empty'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                    return;
+                  }
+                  Navigator.pop(context, title);
+                },
+                child: const Text(
+                  'Save',
+                  style: TextStyle(color: Color(0xFF4285F4)),
+                ),
+              ),
+            ],
+          ),
+    );
+
+    if (newTitle == null || newTitle.trim() == currentTitle) return;
+
+    try {
+      await Supabase.instance.client
+          .from('chats')
+          .update({'title': newTitle.trim()})
+          .eq('id', chatId);
+      ref.invalidate(chatListProvider); // Refresh drawer
+      // REMOVED THE SNACKBAR FOR SUCCESSFUL RENAME
+    } catch (e) {
+      // Keep the error message just in case the rename fails
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to rename chat: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+
   Future<void> _send() async {
     final text = _textController.text.trim();
     if (text.isEmpty || _isSending) return;
@@ -210,34 +288,77 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             itemBuilder: (context, index) {
                               final chat = chats[index];
                               final isActive = chat['id'] == activeChatId;
-                              return ListTile(
-                                leading: Icon(
-                                  Icons.chat_bubble_outline,
-                                  color: isActive ? Colors.white : Colors.blue,
-                                ),
-                                title: Text(
-                                  chat['title'] ?? 'Untitled',
-                                  style: TextStyle(
-                                    color:
-                                        isActive
-                                            ? Colors.white
-                                            : Colors.white70,
-                                    fontWeight:
-                                        isActive
-                                            ? FontWeight.bold
-                                            : FontWeight.normal,
-                                  ),
-                                ),
-                                tileColor:
-                                    isActive
-                                        ? Colors.white.withOpacity(0.2)
-                                        : Colors.transparent,
-                                onTap: () {
-                                  ref
-                                      .read(activeChatIdProvider.notifier)
-                                      .state = chat['id'];
-                                  Navigator.pop(context);
+                              return GestureDetector(
+                                onLongPressStart: (details) async {
+                                  final selected = await showMenu<String>(
+                                    context: context,
+                                    position: RelativeRect.fromLTRB(
+                                      details.globalPosition.dx,
+                                      details.globalPosition.dy,
+                                      details.globalPosition.dx,
+                                      details.globalPosition.dy,
+                                    ),
+                                    color: Colors.grey[900],
+                                    items: [
+                                      PopupMenuItem<String>(
+                                        value: 'rename',
+                                        child: Row(
+                                          children: const [
+                                            Icon(
+                                              Icons.edit,
+                                              color: Colors.white70,
+                                            ),
+                                            SizedBox(width: 8),
+                                            Text(
+                                              'Rename',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      // Add more options here in the future (e.g., Delete, Archive)
+                                    ],
+                                  );
+
+                                  if (selected == 'rename') {
+                                    await _renameChat(
+                                      chat['id'],
+                                      chat['title'] ?? 'Untitled',
+                                    );
+                                  }
                                 },
+                                child: ListTile(
+                                  leading: Icon(
+                                    Icons.chat_bubble_outline,
+                                    color:
+                                        isActive ? Colors.white : Colors.blue,
+                                  ),
+                                  title: Text(
+                                    chat['title'] ?? 'Untitled',
+                                    style: TextStyle(
+                                      color:
+                                          isActive
+                                              ? Colors.white
+                                              : Colors.white70,
+                                      fontWeight:
+                                          isActive
+                                              ? FontWeight.bold
+                                              : FontWeight.normal,
+                                    ),
+                                  ),
+                                  tileColor:
+                                      isActive
+                                          ? Colors.white.withOpacity(0.2)
+                                          : Colors.transparent,
+                                  onTap: () {
+                                    ref
+                                        .read(activeChatIdProvider.notifier)
+                                        .state = chat['id'];
+                                    Navigator.pop(context);
+                                  },
+                                ),
                               );
                             },
                           );
