@@ -100,7 +100,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     Navigator.pop(context); // Close drawer
   }
 
-   Future<void> _renameChat(String chatId, String currentTitle) async {
+  Future<void> _renameChat(String chatId, String currentTitle) async {
     final controller = TextEditingController(text: currentTitle);
     final newTitle = await showDialog<String>(
       context: context,
@@ -165,9 +165,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           .update({'title': newTitle.trim()})
           .eq('id', chatId);
       ref.invalidate(chatListProvider); // Refresh drawer
-      // REMOVED THE SNACKBAR FOR SUCCESSFUL RENAME
     } catch (e) {
-      // Keep the error message just in case the rename fails
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to rename chat: $e'),
@@ -176,7 +174,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
     }
   }
-
 
   Future<void> _send() async {
     final text = _textController.text.trim();
@@ -200,7 +197,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final currentChatId = ref.read(activeChatIdProvider);
 
     if (currentChatId == null) {
-      // Create a new chat when sending first message
       final newChat =
           await Supabase.instance.client
               .from('chats')
@@ -318,7 +314,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                           ],
                                         ),
                                       ),
-                                      // Add more options here in the future (e.g., Delete, Archive)
                                     ],
                                   );
 
@@ -437,19 +432,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     messages.length + (_isSending ? 1 : 0),
                                 itemBuilder: (context, index) {
                                   if (_isSending && index == messages.length) {
-                                    return const Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: Padding(
-                                        padding: EdgeInsets.all(12),
-                                        child: Text(
-                                          'Assistant is typing...',
-                                          style: TextStyle(
-                                            color: Colors.white70,
-                                            fontStyle: FontStyle.italic,
-                                          ),
-                                        ),
-                                      ),
-                                    );
+                                    return const TypingIndicator();
                                   }
                                   final message = messages[index];
                                   return _ChatMessageBubble(message: message);
@@ -537,6 +520,109 @@ class _ChatMessageBubble extends StatelessWidget {
         child: Text(
           message.content,
           style: const TextStyle(color: Colors.white),
+        ),
+      ),
+    );
+  }
+}
+
+class TypingIndicator extends StatefulWidget {
+  const TypingIndicator({super.key});
+
+  @override
+  _TypingIndicatorState createState() => _TypingIndicatorState();
+}
+
+class _TypingIndicatorState extends State<TypingIndicator>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _glowAnimation;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 1500),
+      vsync: this,
+    )..repeat(reverse: true);
+
+    _glowAnimation = Tween<double>(begin: 0.3, end: 0.8).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOutSine),
+    );
+
+    _scaleAnimation = Tween<double>(
+      begin: 0.95,
+      end: 1.05,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            return Transform.scale(
+              scale: _scaleAnimation.value,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      const Color(0xFF4285F4).withOpacity(_glowAnimation.value),
+                      const Color(
+                        0xFF1A1A2E,
+                      ).withOpacity(_glowAnimation.value * 0.7),
+                    ],
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(
+                        0xFF4285F4,
+                      ).withOpacity(_glowAnimation.value * 0.5),
+                      blurRadius: 8 + (4 * _glowAnimation.value),
+                      spreadRadius: 2 * _glowAnimation.value,
+                      offset: const Offset(0, 0),
+                    ),
+                  ],
+                ),
+                child: Text(
+                  'EIDOS is thinking...',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontStyle: FontStyle.italic,
+                    fontWeight: FontWeight.w500,
+                    fontSize: 16,
+                    shadows: [
+                      Shadow(
+                        color: const Color(
+                          0xFF4285F4,
+                        ).withOpacity(_glowAnimation.value * 0.7),
+                        blurRadius: 6,
+                        offset: const Offset(0, 0),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
