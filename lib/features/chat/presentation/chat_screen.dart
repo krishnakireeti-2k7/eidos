@@ -530,30 +530,31 @@ class TypingIndicator extends StatefulWidget {
   const TypingIndicator({super.key});
 
   @override
-  _TypingIndicatorState createState() => _TypingIndicatorState();
+  State<TypingIndicator> createState() => _TypingIndicatorState();
 }
 
 class _TypingIndicatorState extends State<TypingIndicator>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  late Animation<double> _glowAnimation;
-  late Animation<double> _scaleAnimation;
+  late Animation<double> _opacity;
+  late Animation<double> _scale;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(milliseconds: 1800),
       vsync: this,
     )..repeat(reverse: true);
 
-    _glowAnimation = Tween<double>(begin: 0.3, end: 0.8).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOutSine),
-    );
+    _opacity = Tween<double>(
+      begin: 0.5,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
 
-    _scaleAnimation = Tween<double>(
-      begin: 0.95,
-      end: 1.05,
+    _scale = Tween<double>(
+      begin: 0.98,
+      end: 1.02,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
 
@@ -567,63 +568,31 @@ class _TypingIndicatorState extends State<TypingIndicator>
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.centerLeft,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-        child: AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) {
-            return Transform.scale(
-              scale: _scaleAnimation.value,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      const Color(0xFF4285F4).withOpacity(_glowAnimation.value),
-                      const Color(
-                        0xFF1A1A2E,
-                      ).withOpacity(_glowAnimation.value * 0.7),
-                    ],
-                    begin: Alignment.centerLeft,
-                    end: Alignment.centerRight,
-                  ),
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(
-                        0xFF4285F4,
-                      ).withOpacity(_glowAnimation.value * 0.5),
-                      blurRadius: 8 + (4 * _glowAnimation.value),
-                      spreadRadius: 2 * _glowAnimation.value,
-                      offset: const Offset(0, 0),
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          return Transform.scale(
+            scale: _scale.value,
+            child: Opacity(
+              opacity: _opacity.value,
+              child: Text(
+                "EIDOS is thinking...",
+                style: TextStyle(
+                  fontSize: 16,
+                  fontStyle: FontStyle.italic,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white,
+                  shadows: [
+                    Shadow(
+                      color: Colors.white.withOpacity(_opacity.value * 0.6),
+                      blurRadius: 8,
                     ),
                   ],
                 ),
-                child: Text(
-                  'EIDOS is thinking...',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontStyle: FontStyle.italic,
-                    fontWeight: FontWeight.w500,
-                    fontSize: 16,
-                    shadows: [
-                      Shadow(
-                        color: const Color(
-                          0xFF4285F4,
-                        ).withOpacity(_glowAnimation.value * 0.7),
-                        blurRadius: 6,
-                        offset: const Offset(0, 0),
-                      ),
-                    ],
-                  ),
-                ),
               ),
-            );
-          },
-        ),
+            ),
+          );
+        },
       ),
     );
   }
